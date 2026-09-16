@@ -67,42 +67,42 @@ impl FromStr for TagVariant {
 
         // Extract prefix (non-digit characters at the start)
         let mut prefix_end = 0;
-        while prefix_end < current.len() && !current.as_bytes()[prefix_end].is_ascii_digit() {
-            prefix_end += 1;
+        while prefix_end < current.len() && !current.as_bytes().get(prefix_end).expect("We ensure bounds.").is_ascii_digit() {
+            prefix_end = prefix_end.saturating_add(1);
         }
         if prefix_end > 0 {
-            prefix = Some(current[..prefix_end].to_string());
-            current = &current[prefix_end..];
+            prefix = Some(current.get(..prefix_end).expect("We did the match correctly").to_string());
+            current = current.get(prefix_end..).expect("We did the match correctly");
         }
 
         // Parse version numbers and affixes
         while !current.is_empty() {
             // Extract leading non-digit characters (affixes)
             let mut affix_end = 0;
-            while affix_end < current.len() && !current.as_bytes()[affix_end].is_ascii_digit() {
-                affix_end += 1;
+            while affix_end < current.len() && !current.as_bytes().get(affix_end).expect("We did the match correctly").is_ascii_digit() {
+                affix_end = affix_end.saturating_add(1);
             }
             if affix_end > 0 {
-                let part = &current[..affix_end];
+                let part = &current.get(..affix_end).expect("We did the match correctly");
                 // If this is the last part and starts with '-' or '_', treat as suffix
                 if affix_end == current.len() && (part.starts_with('-') || part.starts_with('_')) {
                     suffix = Some(part.to_string());
                 } else {
                     affixes.push(part.to_string());
                 }
-                current = &current[affix_end..];
+                current = current.get(affix_end..).expect("We did the match correctly");
             }
 
             // Extract leading digit characters (version numbers)
             let mut num_end = 0;
-            while num_end < current.len() && current.as_bytes()[num_end].is_ascii_digit() {
-                num_end += 1;
+            while num_end < current.len() && current.as_bytes().get(num_end).expect("We did the match correctly").is_ascii_digit() {
+                num_end = num_end.saturating_add(1);
             }
             if num_end > 0 {
-                if let Ok(num) = current[..num_end].parse::<u64>() {
+                if let Ok(num) = current.get(..num_end).expect("We did the match correctly").parse::<u64>() {
                     version_parts.push(num);
                 }
-                current = &current[num_end..];
+                current = current.get(num_end..).expect("We did the match correctly");
             }
         }
 

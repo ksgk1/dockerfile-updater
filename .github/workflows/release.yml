@@ -6,7 +6,8 @@ on:
     tags: [ 'v*' ]
 
 env:
-  BINARY_NAME: "dockerimage-updater"
+  ARTEFACT_NAME: "dockerfile-updater"
+  BINARY_NAME: "dfu"
 
 jobs:
   build:
@@ -39,7 +40,7 @@ jobs:
         run: |
           $version = if ("${{ github.ref }}".StartsWith("refs/tags/v")) { "${{ github.ref_name }}" } else { "${{ github.sha }}".Substring(0, 7) }
           New-Item -ItemType Directory -Path release -Force
-          Copy-Item -Path "target\x86_64-pc-windows-msvc\release\$env:BINARY_NAME.exe" -Destination "release\$env:BINARY_NAME-$version.exe"
+          Copy-Item -Path "target\x86_64-pc-windows-msvc\release\$env:ARTEFACT_NAME.exe" -Destination "release\$env:BINARY_NAME-$version.exe"
 
       - name: Package (Linux)
         if: matrix.target != 'x86_64-pc-windows-msvc'
@@ -50,7 +51,7 @@ jobs:
             version=$(echo "${{ github.sha }}" | cut -c1-7)
           fi
           mkdir -p release
-          cp target/${{ matrix.target }}/release/$BINARY_NAME release/$BINARY_NAME-$version-${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/$ARTEFACT_NAME release/$BINARY_NAME-$version-${{ matrix.target }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6

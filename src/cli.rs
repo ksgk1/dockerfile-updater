@@ -1,10 +1,15 @@
-use std::path::PathBuf;
+use std::io::{Read as _, Write as _};
+use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use clap::{Args, Parser, Subcommand};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tracing::info;
 
 use crate::utils::Strategy;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Deserialize, Serialize)]
 #[command(version)]
 #[command(long_about = None)]
 pub struct Cli {
@@ -12,7 +17,51 @@ pub struct Cli {
     pub(crate) mode: Mode,
 }
 
-#[derive(Subcommand, Debug, Clone)]
+impl Cli {
+    const fn new_from_mode(mode: Mode) -> Self {
+        Self { mode }
+    }
+
+    /// Reads a saved set of command line arguments from the provided file.
+    pub(crate) fn read_from_config(config_path: &str) -> Result<Self, io::Error> {
+        let final_path = if Path::new(&config_path).is_relative() {
+            let full_path = std::env::current_dir().expect("Current dir exists").join(config_path);
+            &full_path.into_boxed_path()
+        } else {
+            Path::new(config_path)
+        };
+        let mut config_file = fs::File::open(final_path)?;
+        let mut config_file_content = String::new();
+        let _ = config_file.read_to_string(&mut config_file_content);
+
+        let cli: Mode = serde_json::from_str(&config_file_content)?;
+        Ok(Self::new_from_mode(cli))
+    }
+
+    /// Saves the current command line arguments to a configuration file so it
+    /// can be reused.
+    pub(crate) fn save_to_config(&self, config_path: &str) -> Result<(), io::Error> {
+        let mut config_file = fs::File::create(config_path)?;
+        let config = match &self.mode {
+            Mode::Input(args) => json!({ "input": args }),
+            Mode::Overview(args) => json!({ "overview": args }),
+            Mode::File(args) => json!({ "file": args }),
+            Mode::Multi(args) => json!({ "multi": args }),
+            Mode::SelfUpdate | Mode::Load(_) => {
+                info!("Nothing to save.");
+                return Ok(());
+            }
+        };
+
+        let config_json = serde_json::to_string_pretty(&config).expect("Failed to serialize config");
+        config_file.write_all(config_json.as_bytes()).expect("Failed to write to config file");
+        info!("Written config to: `{config_path}`");
+        Ok(())
+    }
+}
+
+#[derive(Subcommand, Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Mode {
     /// Input mode: Enter a docker image string via stdin and receive the
     /// updated version for a given strategy.
@@ -34,11 +83,25 @@ pub enum Mode {
     #[command(alias = "m")]
     Multi(MultiFileArguments),
 
+    /// Loading a saved config, so subsequent calls can reused the config
+    /// without needing to keep all arguments in mind.
+    Load(LoadArguments),
+
     /// Will download the latest binary and place it next to the current one.
     SelfUpdate,
 }
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Deserialize, Serialize)]
+pub struct LoadArguments {
+    #[arg(
+        index = 1,
+        help = "Loads config from file. Will overwrite all other arguments and settings",
+        conflicts_with = "save_config"
+    )]
+    pub(crate) config: Option<String>,
+}
+
+#[derive(Args, Debug, Clone, Deserialize, Serialize)]
 pub struct SingleFileArguments {
     // Using positional argument instead of named argument
     #[arg(value_name = "FILE", help = "Path to the file.")]
@@ -54,7 +117,7 @@ pub struct SingleFileArguments {
     pub(crate) common: CommonOptions,
 }
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Deserialize, Serialize)]
 pub struct InputArguments {
     // Using positional argument instead of named argument
     #[arg(value_name = "IMAGE", help = "The full docker image including the tag, that shall be updated.")]
@@ -67,7 +130,7 @@ pub struct InputArguments {
     pub(crate) common: CommonOptions,
 }
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Deserialize, Serialize)]
 pub struct OverviewArguments {
     // Using positional argument instead of named argument
     #[arg(value_name = "IMAGE", help = "The full docker image including the tag, that shall be updated.")]
@@ -77,7 +140,8 @@ pub struct OverviewArguments {
     pub(crate) common: CommonOptions,
 }
 
-#[derive(Args, Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Args, Debug, Clone, Deserialize, Serialize)]
 pub struct CommonOptions {
     #[arg(long, short, help = "Will filter out tags only for the given architecture.")]
     pub(crate) arch: Option<String>,
@@ -91,6 +155,9 @@ pub struct CommonOptions {
     #[arg(long, short, help = "Activates color output.", default_value_t = false)]
     pub(crate) color: bool,
 
+    #[arg(long, short, help = "Saves config from arguments to disk.", conflicts_with = "load_config")]
+    pub(crate) save_config: Option<String>,
+
     #[arg(
         long,
         short,
@@ -99,7 +166,7 @@ pub struct CommonOptions {
     pub(crate) quiet: bool,
 }
 
-#[derive(Args, Debug, Clone)]
+#[derive(Args, Debug, Clone, Deserialize, Serialize)]
 pub struct MultiFileArguments {
     // Using positional argument instead of named argument
     #[arg(value_name = "FOLDER", help = "Path to the folder.")]
@@ -124,4 +191,17 @@ pub struct MultiFileArguments {
 
     #[command(flatten)]
     pub(crate) common: CommonOptions,
+}
+
+mod tests {
+
+    #[test]
+    fn config_parsing() {
+        let config = crate::cli::Cli::read_from_config("./tests/fixtures/config_example.json");
+        assert!(config.is_ok());
+        assert!(config.unwrap().save_to_config("./tests/fixtures/config_example_new.json").is_ok());
+        let content1 = std::fs::read_to_string("./tests/fixtures/config_example.json").unwrap();
+        let content2 = std::fs::read_to_string("./tests/fixtures/config_example_new.json").unwrap();
+        assert_eq!(content1, content2);
+    }
 }

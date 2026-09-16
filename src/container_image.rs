@@ -6,11 +6,13 @@ use std::time::Duration;
 
 use tracing::{debug, error, info};
 use ureq::Agent;
+use ureq::Error::StatusCode;
 
 use crate::registries::dockerhub::DockerHubResponse;
 use crate::registries::mcr::McrResponseEntry;
 use crate::registries::{self, RegistryResponse, TAG_RESULT_LIMIT, TAGS_CACHE};
 use crate::tag::Tag;
+use crate::utils;
 use crate::utils::{DockerfileUpdate, Strategy, extract_cache_from_file};
 
 const MCR_PREFIX: &str = "mcr.microsoft.com/";
@@ -200,7 +202,7 @@ impl Dockerfile {
                 // an empty image. This can be caused by referencing previous stages.
                 continue;
             }
-            let mut docker_image_tags = image.get_remote_tags(limit, arch).expect("Tags could be found.");
+            let mut docker_image_tags = image.get_remote_tags(limit, arch, None).expect("Tags could be found.");
             docker_image_tags.sort();
 
             if let Some(found_tag) = image.get_tag().find_candidate_tag(&docker_image_tags, strategy) {
@@ -229,7 +231,7 @@ impl Dockerfile {
             if image.get_tag().allowed_missing {
                 continue;
             }
-            let mut docker_image_tags = image.get_remote_tags(limit, arch).expect("Tags could be found.");
+            let mut docker_image_tags = image.get_remote_tags(limit, arch, None).expect("Tags could be found.");
             docker_image_tags.sort();
             if let Some(found_tag) = image.get_tag().find_candidate_tag(&docker_image_tags, strategy) {
                 debug!("Found tag: {found_tag:?}");
@@ -561,10 +563,13 @@ impl ContainerImage {
         }
     }
 
-    fn get_query_url(&self) -> String {
+    fn get_query_url(&self, page_size: Option<u16>) -> String {
         match self {
             Self::Dockerhub(_) => {
                 let full_name = self.get_full_name();
+                if let Some(page_size) = page_size {
+                    return format!("https://hub.docker.com/v2/repositories/{full_name}/tags?page_size={page_size}");
+                }
                 format!("https://hub.docker.com/v2/repositories/{full_name}/tags?page_size=100")
             }
             Self::Mcr(_) => {
@@ -576,12 +581,12 @@ impl ContainerImage {
 
     /// Handles the data fetching for dockerhub, since dockerhub only returns a
     /// limited amount of versions, but will return the next query link.
-    fn request_dockerhub(&self, limit: Option<u16>) -> Result<DockerHubResponse, Box<dyn std::error::Error>> {
+    fn request_dockerhub(&self, limit: Option<u16>, page_size: Option<u16>) -> Result<DockerHubResponse, Box<dyn std::error::Error>> {
         // build agent with global timeout
         let config = Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).build();
         let agent: Agent = config.into();
 
-        let mut request_url = Some(self.get_query_url());
+        let mut request_url = Some(self.get_query_url(page_size));
         let mut parsed_response = DockerHubResponse::default();
 
         while let Some(ref inner_url) = request_url {
@@ -591,6 +596,10 @@ impl ContainerImage {
                     resp
                 }
                 Err(e) => {
+                    if e.to_string() == StatusCode(403).to_string() {
+                        error!("Pagination offset too large for anonymous requests; sign in to page further");
+                        error!("URL: {inner_url}");
+                    }
                     error!("Failed to send request to DockerHub: {e}");
                     return Err(Box::new(Error::ImageNotFound(self.get_full_name())));
                 }
@@ -642,7 +651,7 @@ impl ContainerImage {
         let config = Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).build();
         let agent: Agent = config.into();
 
-        let url = self.get_query_url();
+        let url = self.get_query_url(None);
         let mut response = match agent.get(&url).call() {
             Ok(resp) => {
                 debug!("Received response: {:?}", resp);
@@ -663,7 +672,17 @@ impl ContainerImage {
         }
     }
 
-    pub(crate) fn get_remote_tags(&self, limit: Option<u16>, arch: Option<&String>) -> Result<Vec<Tag>, Box<dyn std::error::Error>> {
+    /// Creates
+    pub(crate) fn cache_file_name(&self) -> String {
+        let mut cache_file_name = std::env::temp_dir();
+        cache_file_name.push("dfu");
+        cache_file_name.push(self.get_full_name().replace('/', "-"));
+        cache_file_name.add_extension("json");
+        cache_file_name.display().to_string()
+    }
+
+    pub(crate) fn get_remote_tags(&self, limit: Option<u16>, arch: Option<&String>, page_size: Option<u16>) -> Result<Vec<Tag>, Box<dyn std::error::Error>> {
+        utils::create_cache_dir();
         if self.get_tag().clone().allowed_missing {
             // This happens if we reference a previous stage, so we just return
             return Ok(Vec::new());
@@ -673,8 +692,7 @@ impl ContainerImage {
         if full_name.is_empty() || full_name == "/" || (self.get_group().is_none() && self.get_name().is_empty()) {
             return Ok(tags);
         }
-        let mut cache_file_name = full_name.replace('/', "-");
-        cache_file_name.push_str(".json");
+        let cache_file_name = self.cache_file_name();
         extract_cache_from_file(full_name, &mut tags, &cache_file_name)?;
 
         debug!("Searching for all tags for image: {full_name}");
@@ -687,7 +705,7 @@ impl ContainerImage {
             drop(cache); // explicit drop, since the cache would still be locked for reading otherwise.
 
             let registry_response: RegistryResponse = match &self {
-                Self::Dockerhub(image_metadata) => registries::RegistryResponse::DockerHub(self.request_dockerhub(limit)?),
+                Self::Dockerhub(image_metadata) => registries::RegistryResponse::DockerHub(self.request_dockerhub(limit, page_size)?),
                 Self::Mcr(image_metadata) => registries::RegistryResponse::MicrosoftContainerRegistry(self.request_mcr()?),
             };
 
@@ -721,7 +739,7 @@ impl ContainerImage {
             || without_from.trim().parse().map(|parsed| (parsed, None)),
             |i| {
                 let (image, alias) = without_from.split_at(i);
-                let alias = alias[3..].trim(); // skip " as"
+                let alias = alias.get(3..).expect("We ensured to check for the string").trim(); // skip " as"
                 image.trim().parse().map(|parsed| (parsed, Some(alias.to_owned())))
             },
         )
@@ -770,14 +788,16 @@ impl Display for ContainerImage {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::as_conversions)]
     use std::fs::{File, remove_file};
     use std::io::Write;
+    use std::str::FromStr;
 
     use pretty_assertions::assert_eq;
     use rand::RngExt;
 
-    use crate::container_image::{ContainerImage, DockerInstruction, Dockerfile};
+    use crate::container_image::{ContainerImage, DockerInstruction, Dockerfile, ImageMetadata};
+    use crate::tag;
     use crate::tag::Tag;
 
     const CONTENT: &str = r#"# Comment 1
@@ -846,7 +866,7 @@ RUN echo && \
         (0..length)
             .map(|_| {
                 let idx = rng.random_range(0..CHARSET.len());
-                CHARSET[idx] as char
+                *CHARSET.get(idx).expect("We did the math correctly.") as char
             })
             .collect()
     }
@@ -899,6 +919,21 @@ RUN echo && \
     }
 
     #[test]
+    fn cache_files() {
+        let image = ContainerImage::Dockerhub(ImageMetadata::from_str("python:3.14").unwrap());
+        let path = image.cache_file_name();
+        assert_eq!(path, "/tmp/dfu/library-python.json".to_owned());
+
+        let image = ContainerImage::Dockerhub(ImageMetadata::from_str("guacamole/guacamole:latest").unwrap());
+        let path = image.cache_file_name();
+        assert_eq!(path, "/tmp/dfu/guacamole-guacamole.json".to_owned());
+
+        let image = ContainerImage::Mcr(ImageMetadata::from_str("dotnet/aspnet:9.0.0").unwrap());
+        let path = image.cache_file_name();
+        assert_eq!(path, "/tmp/dfu/dotnet-aspnet.json".to_owned());
+    }
+
+    #[test]
     fn parse_registry_image_dockerhub() {
         // parsing library dockerhub image
         let image = "node:8.0.0-alpine3.10";
@@ -908,9 +943,9 @@ RUN echo && \
         assert!(registry_image.get_group().is_none());
         assert_eq!(registry_image.get_tag(), "8.0.0-alpine3.10".parse::<Tag>().unwrap().as_ref());
         assert_eq!(registry_image.get_name(), "node");
-        let tags = registry_image.get_remote_tags(None, None);
+        let tags = registry_image.get_remote_tags(None, None, None);
         assert!(tags.is_ok());
-        assert!(!tags.unwrap().is_empty());
+        assert_ne!(tags.unwrap(), [] as [tag::Tag; 0]);
 
         let image = "node:8.0-alpine";
         let registry_image: ContainerImage = image.parse().unwrap();
@@ -928,9 +963,9 @@ RUN echo && \
         assert_eq!(registry_image.get_group(), Some(&String::from("guacamole")));
         assert_eq!(registry_image.get_name(), "guacamole");
         assert_eq!(image, &registry_image.to_string());
-        let tags = registry_image.get_remote_tags(None, Some(&String::from("amd64")));
+        let tags = registry_image.get_remote_tags(None, Some(&String::from("amd64")), None);
         assert!(tags.is_ok());
-        assert!(!tags.unwrap().is_empty());
+        assert_ne!(tags.unwrap(), [] as [tag::Tag; 0]);
     }
 
     #[test]
@@ -944,8 +979,8 @@ RUN echo && \
         assert_eq!(registry_image.get_tag(), "9.0.0".parse::<Tag>().unwrap().as_ref());
         assert_eq!(registry_image.get_name(), "aspnet");
         assert_eq!(image, &registry_image.to_string());
-        let tags = registry_image.get_remote_tags(None, None);
+        let tags = registry_image.get_remote_tags(None, None, None);
         assert!(tags.is_ok());
-        assert!(!tags.unwrap().is_empty());
+        assert_ne!(tags.unwrap(), [] as [tag::Tag; 0]);
     }
 }

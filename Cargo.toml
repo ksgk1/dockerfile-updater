@@ -1,29 +1,42 @@
 [package]
+    authors = ["ksgk1"]
     edition = "2024"
-    name    = "dockerimage-updater"
-    version = "2.1.6"
+    name    = "dockerfile-updater"
+    version = "3.0.0"
 
 [dependencies]
-    clap               = { version = "4.6", features = ["derive"] }
-    rustls             = { version = "0.23", features = ["ring"] }
-    serde              = { version = "1.0", features = ["derive"] }
-    serde_json         = { version = "1.0" }
-    thiserror          = { version = "2.0" }
-    tracing            = { version = "0.1" }
-    tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-    ureq               = { version = "3.3", default-features = false, features = ["json", "rustls"] }
-    walkdir            = { version = "2.5" }
+    clap               = { version = "4.6.6", default-features = false, features = ["derive", "color", "error-context", "help", "std", "suggestions", "usage"] }
+    rustls             = { version = "0.23.45", default-features = false, features = ["ring"] }
+    serde              = { version = "1.0.229", default-features = false, features = ["derive"] }
+    serde_json         = { version = "1.0.151", default-features = false }
+    thiserror          = { version = "2.0.20", default-features = false }
+    tracing            = { version = "0.1.44", default-features = false }
+    tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt"] }
+    ureq               = { version = "3.4.2", default-features = false, features = ["json", "rustls"] }
+    walkdir            = { version = "2.5.0", default-features = false }
 
 [dev-dependencies]
-    pretty_assertions = { version = "1.4" }
-    rand              = { version = "0.10" }
+    pretty_assertions = { version = "1.4.1" }
+    rand              = { version = "0.10.2" }
 
 [lints.clippy]
-    complexity  = { level = "deny", priority = -1 }
-    correctness = { level = "deny", priority = -1 }
-    nursery     = { level = "deny", priority = -1 }
-    pedantic    = { level = "deny", priority = -1 }
-    perf        = { level = "deny", priority = -1 }
-    style       = { level = "deny", priority = -1 }
-    suspicious  = { level = "deny", priority = -1 }
-    unwrap_used = { level = "deny" }
+    arithmetic_side_effects    = "deny"
+    as_conversions             = "deny"
+    complexity                 = { level = "deny", priority = -1 }
+    correctness                = { level = "deny", priority = -1 }
+    exit                       = "deny"
+    expect_used                = "allow"
+    indexing_slicing           = "deny"
+    nursery                    = { level = "deny", priority = -1 }
+    panic                      = "deny"
+    panic_in_result_fn         = "deny"
+    pedantic                   = { level = "deny", priority = -1 }
+    perf                       = { level = "deny", priority = -1 }
+    string_slice               = "deny"
+    style                      = { level = "deny", priority = -1 }
+    suspicious                 = { level = "deny", priority = -1 }
+    todo                       = "deny"
+    unchecked_time_subtraction = "deny"
+    unimplemented              = "deny"
+    unreachable                = "deny"
+    unwrap_used                = "deny"

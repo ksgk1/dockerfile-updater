@@ -11,7 +11,7 @@ pub mod mcr;
 
 /// The default limit of how many tags should be fetched. Can be overwritten
 /// with --tag-search-limit
-pub const TAG_RESULT_LIMIT: usize = 2000;
+pub const TAG_RESULT_LIMIT: usize = 1000;
 /// Conversion constant
 pub const DURATION_HOUR_AS_SECS: u64 = 60 * 60;
 /// A cache for quicker lookups for repeated usage of already cached tags. Will

@@ -5,8 +5,8 @@ use serde::Deserialize;
 /// The inner response from Dockerhub when requesting a list of tags for a given
 /// image.
 pub struct DockerHubResult {
-    pub images:            Vec<HubImage>,
-    pub name:              String,
+    pub images: Vec<HubImage>,
+    pub name:   String,
 }
 
 #[allow(dead_code)]

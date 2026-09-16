@@ -6,15 +6,15 @@
 
 ## tl;dr
 
-The tool allows to get a new version for a given docker image (or Dockerfile(s)). There are 5 different strategies: Update to next minor version, update to latest minor version, update to next major version and update to lastest major version, or latest available ( a combination of the latest minor and major).
+The tool allows to get a new version for a given dockerfile. There are 5 different strategies: Update to next minor version, update to latest minor version, update to next major version and update to lastest major version, or latest available ( a combination of the latest minor and major).
 
 ## Examples
 
 ```bash
-dockerimage-updater input mcr.microsoft.com/dotnet/aspnet:9.0.0 --strat next-patch -q
+dockerfile-updater input mcr.microsoft.com/dotnet/aspnet:9.0.0 --strat next-patch -q
 mcr.microsoft.com/dotnet/aspnet:9.0.1
 
-dockerimage-updater overview node:22.6.0-bookworm-slim -q
+dockerfile-updater overview node:22.6.0-bookworm-slim -q
 Results for:    node:22.6.0-bookworm-slim
 next minor:     node:22.7-bookworm-slim
 latest minor:   node:22.22.0-bookworm-slim
@@ -31,6 +31,8 @@ latest major:   node:25.6.1-bookworm-slim
 * Quiet-mode only prints the result, in case the output need to be captured.
 * Updating entire dockerfile(s) via file input. Dry-run can be used for a preview.
 * Help available via: `dockerimage-updater --help`.
+* Self-update
+* Storing and loading configurations for easier reuse.
 
 ## Notes
 

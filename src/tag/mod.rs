@@ -56,7 +56,7 @@ fn split_version_and_rest(s: &str) -> (&str, &str) {
         if !c.is_ascii_digit() && c != '.' {
             break;
         }
-        split_at = i + 1;
+        split_at = i.saturating_add(1);
     }
     s.split_at(split_at)
 }
@@ -216,7 +216,6 @@ impl Tag {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use pretty_assertions::assert_eq;
 
     use crate::tag::Tag;
