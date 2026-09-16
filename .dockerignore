@@ -1,0 +1,6 @@
+target/
+tests/
+.github
+.idea
+.vscode
+assets
