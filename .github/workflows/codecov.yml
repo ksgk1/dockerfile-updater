@@ -21,7 +21,7 @@ jobs:
         run: cargo llvm-cov --all-features --workspace --lcov --ignore-filename-regex=main.rs --output-path lcov.info
 
       - name: Generate code coverage (HTML)
-        run: rm -f *-*.json && cargo llvm-cov --all-features --workspace --html --ignore-filename-regex=main.rs --output-dir coverage-html
+        run: rm -f /tmp/dfu/*-*.json && cargo llvm-cov --all-features --workspace --html --ignore-filename-regex=main.rs --output-dir coverage-html
 
       - name: Upload HTML coverage report
         uses: actions/upload-artifact@v6

@@ -1,0 +1,21 @@
+{
+  "multi": {
+    "common": {
+      "arch": null,
+      "color": false,
+      "debug": false,
+      "quiet": false,
+      "save_config": "config_example.json",
+      "tag_search_limit": null
+    },
+    "dry_run": true,
+    "exclude_file": [
+      "tests/fixtures/Dockerfile1"
+    ],
+    "folder": "tests/",
+    "ignore_versions": [
+      "alpine:3.12"
+    ],
+    "strat": "LatestPatch"
+  }
+}

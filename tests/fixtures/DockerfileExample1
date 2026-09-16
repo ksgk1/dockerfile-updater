@@ -1,0 +1,28 @@
+# Comment
+# Comment 2
+# Comment 3
+# comment 3.1
+FROM alpine:3.24.1 AS base
+COPY /app /app
+
+FROM node:26.8.2-alpine3.24 AS build
+RUN apk install \
+        python \
+        make \
+        g++
+# comment in the middle
+COPY --from=base /app /app
+RUN npm install
+
+FROM node:26.8.2-alpine3.24 AS release
+COPY /app /app
+
+FROM python:3.14.7-alpine3.24
+
+FROM nginx:1.31.5-alpine3.24
+
+FROM guacamole/guacamole:1.6.0
+
+# comment 4
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS Final
+# comment 5
