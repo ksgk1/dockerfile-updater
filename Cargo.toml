@@ -2,7 +2,7 @@
     authors = ["ksgk1"]
     edition = "2024"
     name    = "dockerfile-updater"
-    version = "3.0.0"
+    version = "3.0.1"
 
 [[bin]]
     name = "dockerfile-updater"
@@ -12,7 +12,7 @@
     rustls             = { version = "0.23.45", default-features = false, features = ["ring"] }
     serde              = { version = "1.0.229", default-features = false, features = ["derive"] }
     serde_json         = { version = "1.0.151", default-features = false }
-    thiserror          = { version = "2.0.20", default-features = false }
+    thiserror          = { version = "2.0.21", default-features = false }
     tracing            = { version = "0.1.44", default-features = false }
     tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt"] }
     ureq               = { version = "3.4.2", default-features = false, features = ["json", "rustls"] }
@@ -20,7 +20,7 @@
 
 [dev-dependencies]
     pretty_assertions = { version = "1.4.1" }
-    rand              = { version = "0.10.2" }
+    rand              = { version = "0.10.3" }
 
 [lints.clippy]
     arithmetic_side_effects    = "deny"

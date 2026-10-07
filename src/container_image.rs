@@ -16,6 +16,9 @@ use crate::utils;
 use crate::utils::{DockerfileUpdate, Strategy, extract_cache_from_file};
 
 const MCR_PREFIX: &str = "mcr.microsoft.com/";
+/// Common registries that are not supported. There might be more, but for now
+/// its limited to detecting those.
+const UNSUPPORTED_REGISTRIES: [&str; 5] = ["azurecr.io", "ghcr.io", "gcr.io", "quay.io", "registry.gitlab"];
 
 /// The dockerfile related errors, that may occur during parsing.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -197,9 +200,11 @@ impl Dockerfile {
     pub(crate) fn update_images(&mut self, apply_to_file: bool, strategy: &Strategy, limit: Option<u16>, arch: Option<&String>) {
         for image in self.get_base_images_mut() {
             if image.is_empty() {
-                // If this happens, we can not fetch any data. This can be cause by comments
-                // above the first FROM instruction, since it is considered an empty stage with
-                // an empty image. This can be caused by referencing previous stages.
+                // If this happens, we can not fetch any data. This can be cause
+                // by comments above the first FROM instruction,
+                // since it is considered an empty stage with an
+                // empty image. This can be caused by referencing previous
+                // stages.
                 continue;
             }
             let mut docker_image_tags = image.get_remote_tags(limit, arch, None).expect("Tags could be found.");
@@ -422,6 +427,7 @@ impl FromStr for ImageMetadata {
 pub enum ContainerImage {
     Dockerhub(ImageMetadata),
     Mcr(ImageMetadata),
+    Unsupported(String, Tag),
 }
 
 impl Default for ContainerImage {
@@ -437,6 +443,7 @@ impl ContainerImage {
     const fn get_group(&self) -> Option<&String> {
         match self {
             Self::Dockerhub(metadata) | Self::Mcr(metadata) => metadata.group.as_ref(),
+            Self::Unsupported(_, _) => None,
         }
     }
 
@@ -445,13 +452,15 @@ impl ContainerImage {
     fn get_group_string(&self) -> String {
         match self {
             Self::Dockerhub(metadata) | Self::Mcr(metadata) => metadata.group.clone().unwrap_or_default(),
+            Self::Unsupported(_, _) => String::new(),
         }
     }
 
     /// Returns the full name for a  given image, e.g. node, python, aspnet
-    pub const fn get_name(&self) -> &String {
+    pub fn get_name(&self) -> &str {
         match self {
             Self::Dockerhub(metadata) | Self::Mcr(metadata) => &metadata.name,
+            Self::Unsupported(s, _) => s,
         }
     }
 
@@ -459,9 +468,10 @@ impl ContainerImage {
     /// dotnet/aspnet
     pub(crate) fn get_full_name(&self) -> String {
         match self {
+            Self::Unsupported(s, _) => s.clone(),
             Self::Dockerhub(metadata) => {
                 if metadata.tag.allowed_missing {
-                    self.get_name().clone()
+                    self.get_name().to_owned()
                 } else if self.get_group().is_some() {
                     format!("{}/{}", self.get_group().expect("Group was set."), self.get_name())
                 } else {
@@ -482,9 +492,10 @@ impl ContainerImage {
     /// dotnet/aspnet
     pub(crate) fn get_dockerimage_name(&self) -> String {
         match self {
+            Self::Unsupported(s, _) => s.clone(),
             Self::Dockerhub(metadata) => {
                 if metadata.tag.allowed_missing {
-                    self.get_name().clone()
+                    self.get_name().to_owned()
                 } else if self.get_group().is_some() {
                     format!("{}/{}", self.get_group().expect("Group was set."), self.get_name())
                 } else {
@@ -505,6 +516,7 @@ impl ContainerImage {
     /// library/python:<tag>, dotnet/aspnet:<tag>
     pub(crate) fn get_full_tagged_name(&self) -> String {
         match self {
+            Self::Unsupported(s, _) => s.clone(),
             Self::Dockerhub(metadata) | Self::Mcr(metadata) => {
                 if self.get_group_string().is_empty() {
                     format!("{}:{}", self.get_name(), self.get_tag())
@@ -519,6 +531,7 @@ impl ContainerImage {
     /// aspnet:<tag>
     pub(crate) fn get_tagged_name(&self) -> String {
         match self {
+            Self::Unsupported(s, _) => s.clone(),
             Self::Dockerhub(metadata) | Self::Mcr(metadata) => {
                 format!("{}:{}", self.get_name(), self.get_tag())
             }
@@ -528,43 +541,48 @@ impl ContainerImage {
     pub const fn get_tag(&self) -> &Tag {
         match self {
             Self::Dockerhub(metadata) | Self::Mcr(metadata) => &metadata.tag,
+            Self::Unsupported(_, tag) => tag,
         }
     }
 
     fn set_tag(&mut self, tag: &Tag) {
         match self {
             Self::Dockerhub(metadata) | Self::Mcr(metadata) => metadata.tag = tag.clone(),
+            Self::Unsupported(_, _) => {}
         }
     }
 
     const fn is_latest(&self) -> bool {
         match self {
             Self::Dockerhub(metadata) | Self::Mcr(metadata) => metadata.tag.latest,
+            Self::Unsupported(_, _) => false,
         }
     }
 
     const fn is_mcr(&self) -> bool {
         match self {
-            Self::Dockerhub(_) => false,
             Self::Mcr(_) => true,
+            Self::Dockerhub(_) | Self::Unsupported(_, _) => false,
         }
     }
 
     const fn is_dockerhub(&self) -> bool {
         match self {
             Self::Dockerhub(_) => true,
-            Self::Mcr(_) => false,
+            Self::Mcr(_) | Self::Unsupported(_, _) => false,
         }
     }
 
     fn is_empty(&self) -> bool {
         match self {
             Self::Dockerhub(image_metadata) | Self::Mcr(image_metadata) => *image_metadata == ImageMetadata::default(),
+            Self::Unsupported(_, _) => false,
         }
     }
 
     fn get_query_url(&self, page_size: Option<u16>) -> String {
         match self {
+            Self::Unsupported(_, _) => String::new(),
             Self::Dockerhub(_) => {
                 let full_name = self.get_full_name();
                 if let Some(page_size) = page_size {
@@ -707,6 +725,8 @@ impl ContainerImage {
             let registry_response: RegistryResponse = match &self {
                 Self::Dockerhub(image_metadata) => registries::RegistryResponse::DockerHub(self.request_dockerhub(limit, page_size)?),
                 Self::Mcr(image_metadata) => registries::RegistryResponse::MicrosoftContainerRegistry(self.request_mcr()?),
+                #[allow(clippy::unreachable)]
+                Self::Unsupported(_, _) => unreachable!("Unsupported images should have been filtered out by allowed_missing check"),
             };
 
             let mut tags = registry_response.get_tags(arch.map(std::string::String::as_str));
@@ -755,6 +775,22 @@ impl FromStr for ContainerImage {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        for unsupported_registry in UNSUPPORTED_REGISTRIES {
+            if s.starts_with(unsupported_registry) {
+                error!("Registry {unsupported_registry} is not supported.");
+                return Ok(Self::Unsupported(
+                    s.to_string(),
+                    Tag {
+                        major:           None,
+                        minor:           None,
+                        patch:           None,
+                        variant:         None,
+                        allowed_missing: true,
+                        latest:          false,
+                    },
+                ));
+            }
+        }
         Ok(if s.to_ascii_lowercase().starts_with(MCR_PREFIX) {
             Self::Mcr(s.strip_prefix(MCR_PREFIX).expect("Prefix exists.").parse()?)
         } else {
@@ -766,6 +802,7 @@ impl FromStr for ContainerImage {
 impl Display for ContainerImage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Unsupported(s, _) => write!(f, "{s}"),
             Self::Dockerhub(metadata) | Self::Mcr(metadata) => {
                 if self.is_mcr() {
                     write!(f, "mcr.microsoft.com/")?;
@@ -982,5 +1019,40 @@ RUN echo && \
         let tags = registry_image.get_remote_tags(None, None, None);
         assert!(tags.is_ok());
         assert_ne!(tags.unwrap(), [] as [tag::Tag; 0]);
+    }
+
+    #[test]
+    fn parse_unsupported_registry() {
+        let image = "ghcr.io/user/image:v1";
+        let container_image: ContainerImage = image.parse().unwrap();
+        assert!(matches!(container_image, ContainerImage::Unsupported(_, _)));
+        assert_eq!(container_image.to_string(), image);
+        assert!(container_image.get_tag().allowed_missing);
+
+        let image2 = "azurecr.io/myimage:latest";
+        let container_image2: ContainerImage = image2.parse().unwrap();
+        assert!(matches!(container_image2, ContainerImage::Unsupported(_, _)));
+        assert_eq!(container_image2.to_string(), image2);
+
+        let image3 = "quay.io/repo/app:v2.0";
+        let container_image3: ContainerImage = image3.parse().unwrap();
+        assert!(matches!(container_image3, ContainerImage::Unsupported(_, _)));
+        assert_eq!(container_image3.to_string(), image3);
+    }
+
+    #[test]
+    fn dockerfile_with_unsupported_registry() {
+        let content = "FROM ghcr.io/user/image:v1\nFROM node:14";
+        let dockerfile = Dockerfile::parse(content).unwrap();
+        assert_eq!(dockerfile.get_instructions().len(), 2);
+
+        let first_instruction = dockerfile.get_instructions().first().unwrap();
+        assert_eq!(first_instruction.to_string(), "FROM ghcr.io/user/image:v1\n");
+
+        if let DockerInstruction::From(image, _) = first_instruction {
+            assert!(matches!(**image, ContainerImage::Unsupported(_, _)));
+        } else {
+            panic!("Expected From instruction");
+        }
     }
 }
