@@ -103,6 +103,20 @@ impl AsRef<Self> for Tag {
 }
 
 impl Tag {
+    /// A tag that marks an image as not pinned to a concrete version, e.g.
+    /// when the image references a previous build stage or its registry is
+    /// not supported. Such images are excluded from updates.
+    pub const fn missing() -> Self {
+        Self {
+            major:           None,
+            minor:           None,
+            patch:           None,
+            variant:         None,
+            allowed_missing: true,
+            latest:          false,
+        }
+    }
+
     /// Checks if the major versions match.
     pub(crate) const fn is_same_major(&self, rhs: &Self) -> bool {
         match (self.major, rhs.major) {

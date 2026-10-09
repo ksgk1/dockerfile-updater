@@ -1,8 +1,5 @@
-use std::env;
-use std::sync::OnceLock;
-
 use clap::Parser;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -15,11 +12,16 @@ mod registries;
 mod tag;
 pub(crate) mod utils;
 
-pub(crate) static GITHUB_REPO_BASE_URL: OnceLock<String> = OnceLock::new();
-pub(crate) static GITHUB_REPO_RELEASE_REFS_URL: OnceLock<String> = OnceLock::new();
-pub(crate) static GITHUB_REPO_RELEASE_URL: OnceLock<String> = OnceLock::new();
+/// Top level errors of a whole program run.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MainError {
+    #[error(transparent)]
+    Docker(#[from] container_image::Error),
+    #[error("Configuration error: {0}")]
+    Config(#[from] std::io::Error),
+}
 
-fn main() {
+fn main() -> Result<(), MainError> {
     init();
     let mut cli = cli::Cli::parse();
 
@@ -29,13 +31,12 @@ fn main() {
 
     let load_config = match &cli.mode {
         cli::Mode::Input(_) | cli::Mode::Overview(_) | cli::Mode::File(_) | cli::Mode::Multi(_) | cli::Mode::SelfUpdate => None,
-        cli::Mode::Load(load_arguments) => load_arguments.config.as_ref(),
+        cli::Mode::Load(load_arguments) => load_arguments.config.clone(),
     };
 
     if let Some(config_path) = load_config {
-        let config = Cli::read_from_config(config_path).expect("Could read config");
+        cli = Cli::read_from_config(&config_path)?;
         info!("Loading configuration from file: {config_path}");
-        cli = config;
     }
 
     let save_config = match &cli.mode {
@@ -48,21 +49,17 @@ fn main() {
 
     if let Some(config_path) = save_config {
         info!("Saving configuration from command line options to file: {config_path}. This will override any existing configuration.");
-        let _ = cli.save_to_config(config_path);
+        if let Err(e) = cli.save_to_config(config_path) {
+            error!("Could not save configuration to `{config_path}`: {e}");
+        }
     }
 
     init_logging(&cli);
 
     match cli.mode {
-        cli::Mode::Input(input_mode) => {
-            handle_input(&input_mode);
-        }
-        cli::Mode::Overview(overview_mode) => {
-            handle_overview(&overview_mode);
-        }
-        cli::Mode::File(file_mode) => {
-            handle_file(&file_mode);
-        }
+        cli::Mode::Input(input_mode) => handle_input(&input_mode)?,
+        cli::Mode::Overview(overview_mode) => handle_overview(&overview_mode)?,
+        cli::Mode::File(file_mode) => handle_file(&file_mode)?,
         cli::Mode::Multi(multi_mode) => {
             handle_multi(&multi_mode);
         }
@@ -73,6 +70,7 @@ fn main() {
             error!("Should already handled by other functions. Loaded config was processed already.");
         }
     }
+    Ok(())
 }
 
 fn init_logging(cli: &cli::Cli) {
@@ -116,14 +114,7 @@ fn init_logging(cli: &cli::Cli) {
 fn init() {
     // Needs to be initialised so that ureq can use rustls and not be
     // dependendant on openssl. This makes building for musl a lot easier.
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("Failed to install rustls crypto provider");
-
-    // URLs that are being used for the update mechanism
-    let github_author = env!("CARGO_PKG_AUTHORS").to_ascii_lowercase();
-    let github_repo = env!("CARGO_PKG_NAME");
-    GITHUB_REPO_BASE_URL.get_or_init(|| format!("https://github.com/{github_author}/{github_repo}"));
-    GITHUB_REPO_RELEASE_REFS_URL.get_or_init(|| format!("{}/refs?type=tag", GITHUB_REPO_BASE_URL.get().expect("We did not forget to intialise.")));
-    GITHUB_REPO_RELEASE_URL.get_or_init(|| format!("{}/releases", GITHUB_REPO_BASE_URL.get().expect("We did not forget to intialise.")));
+    if rustls::crypto::ring::default_provider().install_default().is_err() {
+        debug!("A rustls crypto provider is already installed; not overriding it.");
+    }
 }

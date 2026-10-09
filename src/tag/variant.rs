@@ -19,38 +19,28 @@ pub struct TagVariant {
 
 impl Display for TagVariant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.prefix {
-            Some(prefix) => write!(f, "{prefix}")?,
-            None => write!(f, "")?,
+        if let Some(prefix) = &self.prefix {
+            write!(f, "{prefix}")?;
         }
-        match self.major {
-            Some(major) => write!(f, "{major}")?,
-            None => write!(f, "")?,
+        if let Some(major) = self.major {
+            write!(f, "{major}")?;
         }
-        match self.minor {
-            Some(minor) => {
-                if self.affixes.is_empty() {
-                    write!(f, ".{minor}")?;
-                } else {
-                    write!(f, "{}{minor}", self.affixes.first().expect("Affixes exists"))?;
-                }
+        if let Some(minor) = self.minor {
+            match self.affixes.first() {
+                Some(affix) => write!(f, "{affix}{minor}")?,
+                None => write!(f, ".{minor}")?,
             }
-            None => write!(f, "")?,
         }
-        match self.patch {
-            Some(patch) => {
-                if self.affixes.len() < 2 {
-                    write!(f, ".{patch}")?;
-                } else {
-                    write!(f, "{}{patch}", self.affixes.get(1).expect("Affixes exists"))?;
-                }
+        if let Some(patch) = self.patch {
+            match self.affixes.get(1) {
+                Some(affix) => write!(f, "{affix}{patch}")?,
+                None => write!(f, ".{patch}")?,
             }
-            None => write!(f, "")?,
         }
-        match &self.suffix {
-            Some(suffix) => write!(f, "{suffix}"),
-            None => write!(f, ""),
+        if let Some(suffix) = &self.suffix {
+            write!(f, "{suffix}")?;
         }
+        Ok(())
     }
 }
 
@@ -67,42 +57,43 @@ impl FromStr for TagVariant {
 
         // Extract prefix (non-digit characters at the start)
         let mut prefix_end = 0;
-        while prefix_end < current.len() && !current.as_bytes().get(prefix_end).expect("We ensure bounds.").is_ascii_digit() {
+        while prefix_end < current.len() && !current.as_bytes().get(prefix_end).is_some_and(u8::is_ascii_digit) {
             prefix_end = prefix_end.saturating_add(1);
         }
         if prefix_end > 0 {
-            prefix = Some(current.get(..prefix_end).expect("We did the match correctly").to_string());
-            current = current.get(prefix_end..).expect("We did the match correctly");
+            prefix = Some(current.get(..prefix_end).unwrap_or("").to_string());
+            current = current.get(prefix_end..).unwrap_or("");
         }
 
         // Parse version numbers and affixes
         while !current.is_empty() {
             // Extract leading non-digit characters (affixes)
             let mut affix_end = 0;
-            while affix_end < current.len() && !current.as_bytes().get(affix_end).expect("We did the match correctly").is_ascii_digit() {
+            while affix_end < current.len() && !current.as_bytes().get(affix_end).is_some_and(u8::is_ascii_digit) {
                 affix_end = affix_end.saturating_add(1);
             }
             if affix_end > 0 {
-                let part = &current.get(..affix_end).expect("We did the match correctly");
-                // If this is the last part and starts with '-' or '_', treat as suffix
+                let part = current.get(..affix_end).unwrap_or("");
+                // If this is the last part and starts with '-' or '_', treat as
+                // suffix
                 if affix_end == current.len() && (part.starts_with('-') || part.starts_with('_')) {
                     suffix = Some(part.to_string());
                 } else {
                     affixes.push(part.to_string());
                 }
-                current = current.get(affix_end..).expect("We did the match correctly");
+                current = current.get(affix_end..).unwrap_or("");
             }
 
             // Extract leading digit characters (version numbers)
             let mut num_end = 0;
-            while num_end < current.len() && current.as_bytes().get(num_end).expect("We did the match correctly").is_ascii_digit() {
+            while num_end < current.len() && current.as_bytes().get(num_end).is_some_and(u8::is_ascii_digit) {
                 num_end = num_end.saturating_add(1);
             }
             if num_end > 0 {
-                if let Ok(num) = current.get(..num_end).expect("We did the match correctly").parse::<u64>() {
+                if let Ok(num) = current.get(..num_end).unwrap_or("").parse::<u64>() {
                     version_parts.push(num);
                 }
-                current = current.get(num_end..).expect("We did the match correctly");
+                current = current.get(num_end..).unwrap_or("");
             }
         }
 

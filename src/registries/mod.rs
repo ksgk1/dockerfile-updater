@@ -15,7 +15,9 @@ pub const TAG_RESULT_LIMIT: usize = 1000;
 /// Conversion constant
 pub const DURATION_HOUR_AS_SECS: u64 = 60 * 60;
 /// A cache for quicker lookups for repeated usage of already cached tags. Will
-/// be valid for max. 1 hour.
+/// be valid for max. 1 hour. Keys combine the registry path and the
+/// architecture filter, since tags are filtered by architecture before being
+/// cached.
 pub static TAGS_CACHE: LazyLock<RwLock<HashMap<String, Vec<Tag>>>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 #[derive(Debug)]
@@ -32,8 +34,8 @@ trait ResponseTagList {
     fn get_tags(&self, arch: Option<&str>) -> Vec<Tag> {
         self.filter_by_arch(arch)
             .filter_map(|name| {
-                // Parse the tag and return `Some(tag)` if successful, or `None` if parsing
-                // fails.
+                // Parse the tag and return `Some(tag)` if successful, or `None`
+                // if parsing fails.
                 name.parse::<Tag>().ok()
             })
             .filter(|tag| tag.major.is_some() || tag.variant.is_some())

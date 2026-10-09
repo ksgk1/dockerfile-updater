@@ -24,11 +24,16 @@ impl Cli {
 
     /// Reads a saved set of command line arguments from the provided file.
     pub(crate) fn read_from_config(config_path: &str) -> Result<Self, io::Error> {
-        let final_path = if Path::new(&config_path).is_relative() {
-            let full_path = std::env::current_dir().expect("Current dir exists").join(config_path);
-            &full_path.into_boxed_path()
+        let final_path = if Path::new(config_path).is_relative() {
+            match std::env::current_dir() {
+                Ok(cwd) => cwd.join(config_path),
+                Err(e) => {
+                    eprintln!("Could not determine the current directory: {e}");
+                    PathBuf::from(config_path)
+                }
+            }
         } else {
-            Path::new(config_path)
+            PathBuf::from(config_path)
         };
         let mut config_file = fs::File::open(final_path)?;
         let mut config_file_content = String::new();
@@ -53,8 +58,8 @@ impl Cli {
             }
         };
 
-        let config_json = serde_json::to_string_pretty(&config).expect("Failed to serialize config");
-        config_file.write_all(config_json.as_bytes()).expect("Failed to write to config file");
+        let config_json = serde_json::to_string_pretty(&config).map_err(io::Error::other)?;
+        config_file.write_all(config_json.as_bytes())?;
         info!("Written config to: `{config_path}`");
         Ok(())
     }
@@ -155,7 +160,7 @@ pub struct CommonOptions {
     #[arg(long, short, help = "Activates color output.", default_value_t = false)]
     pub(crate) color: bool,
 
-    #[arg(long, short, help = "Saves config from arguments to disk.", conflicts_with = "load_config")]
+    #[arg(long, short, help = "Saves config from arguments to disk.")]
     pub(crate) save_config: Option<String>,
 
     #[arg(
