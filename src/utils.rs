@@ -43,7 +43,7 @@ fn github_release_refs_url() -> String {
     format!("{}/refs?type=tag", github_base_url())
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, clap::ValueEnum, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum, Deserialize, Serialize)]
 #[clap(rename_all = "kebab-case")]
 pub enum Strategy {
     #[default]
@@ -54,6 +54,16 @@ pub enum Strategy {
     LatestMinor,
     NextMajor,
     LatestMajor,
+}
+
+impl Strategy {
+    pub(crate) const fn without_major(self) -> Self {
+        match self {
+            Self::Latest | Self::LatestMajor => Self::LatestMinor,
+            Self::NextMajor => Self::NextMinor,
+            Self::NextPatch | Self::LatestPatch | Self::NextMinor | Self::LatestMinor => self,
+        }
+    }
 }
 
 // This needs to be OsStr since it is used by clap.
@@ -118,7 +128,7 @@ pub fn handle_input(input_mode: &cli::InputArguments) -> Result<(), Error> {
     let docker_image: ContainerImage = input_mode.input.parse()?;
     let mut docker_image_tags = docker_image.get_remote_tags(input_mode.common.tag_search_limit, input_mode.common.arch.as_ref(), None)?;
     docker_image_tags.sort();
-    if let Some(found_tag) = docker_image.get_tag().find_candidate_tag(&docker_image_tags, &input_mode.strat) {
+    if let Some(found_tag) = docker_image.get_tag().find_candidate_tag(&docker_image_tags, input_mode.strat) {
         info!(
             "===> Candidate tag: {}:{found_tag} (from: {})",
             docker_image.registry_path(),
@@ -161,7 +171,7 @@ pub fn handle_overview(overview_mode: &cli::OverviewArguments) -> Result<(), Err
         Strategy::NextMajor,
         Strategy::LatestMajor,
     ] {
-        if let Some(found_tag) = docker_image.get_tag().find_candidate_tag(&docker_image_tags, &strategy) {
+        if let Some(found_tag) = docker_image.get_tag().find_candidate_tag(&docker_image_tags, strategy) {
             if overview_mode.common.quiet {
                 println!("{strategy}:\t{}:{}", docker_image.pullable_name(), found_tag.to_string().trim_end_matches('.'));
             } else {
@@ -189,11 +199,13 @@ pub fn handle_file(file_mode: &cli::SingleFileArguments) -> Result<(), Error> {
             path.canonicalize().map_or_else(|_| file.clone(), |p| p.display().to_string())
         );
         let mut dockerfile = Dockerfile::read(&file_mode.file)?;
+        let no_major_updates = parse_image_list(&file_mode.no_major_updates, "no major updates");
         dockerfile.update_images(
             !file_mode.dry_run,
-            &file_mode.strat,
+            file_mode.strat,
             file_mode.common.tag_search_limit,
             file_mode.common.arch.as_ref(),
+            &no_major_updates,
         )
     } else {
         error!("File `{file}` not found.");
@@ -202,6 +214,21 @@ pub fn handle_file(file_mode: &cli::SingleFileArguments) -> Result<(), Error> {
             reason: String::from("the file does not exist"),
         })
     }
+}
+
+/// Parses a list of image strings that shall restrict updates in some way.
+/// Entries that cannot be parsed are logged and skipped.
+fn parse_image_list(images: &[String], purpose: &str) -> Vec<ContainerImage> {
+    images
+        .iter()
+        .filter_map(|image| match image.parse::<ContainerImage>() {
+            Ok(parsed) => Some(parsed),
+            Err(e) => {
+                error!("Could not parse image `{image}` for {purpose}: {e}. It will be skipped.");
+                None
+            }
+        })
+        .collect()
 }
 
 /// Handling function that will handle multiple files at once, with a given
@@ -228,20 +255,17 @@ pub fn handle_multi(multi_mode: &cli::MultiFileArguments) {
         }
     }
     info!("Found files: {dockerfiles_to_process:?}");
-    let ignored_images: Vec<ContainerImage> = multi_mode
-        .ignore_versions
-        .iter()
-        .filter_map(|image| match image.parse::<ContainerImage>() {
-            Ok(image) => Some(image),
-            Err(e) => {
-                error!("Could not parse ignored image `{image}`: {e}. It will not be ignored.");
-                None
-            }
-        })
-        .collect();
+    let ignored_images = parse_image_list(&multi_mode.ignore_versions, "ignoring versions");
     if !ignored_images.is_empty() {
         debug!("Skipping image updates:");
         for image in &ignored_images {
+            debug!("\t\t{}", image.get_name());
+        }
+    }
+    let no_major_updates = parse_image_list(&multi_mode.no_major_updates, "no major updates");
+    if !no_major_updates.is_empty() {
+        debug!("Skipping major updates for images:");
+        for image in &no_major_updates {
             debug!("\t\t{}", image.get_name());
         }
     }
@@ -249,10 +273,11 @@ pub fn handle_multi(multi_mode: &cli::MultiFileArguments) {
         match Dockerfile::read(&PathBuf::from(dockerfile_to_process)) {
             Ok(dockerfile) => {
                 let possible_updates = dockerfile.generate_image_updates(
-                    &multi_mode.strat,
+                    multi_mode.strat,
                     multi_mode.common.tag_search_limit,
                     multi_mode.common.arch.as_ref(),
                     &ignored_images,
+                    &no_major_updates,
                 );
                 let dockerfile_updated = possible_updates.apply();
                 if multi_mode.dry_run {
@@ -567,6 +592,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn strategy_without_major() {
+        let fixtures = [
+            (Strategy::Latest, Strategy::LatestMinor),
+            (Strategy::NextMajor, Strategy::NextMinor),
+            (Strategy::LatestMajor, Strategy::LatestMinor),
+            (Strategy::NextMinor, Strategy::NextMinor),
+            (Strategy::LatestMinor, Strategy::LatestMinor),
+            (Strategy::NextPatch, Strategy::NextPatch),
+            (Strategy::LatestPatch, Strategy::LatestPatch),
+        ];
+        for (strategy, expected) in fixtures {
+            assert_eq!(strategy.without_major(), expected, "strategy: {strategy}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn mark_executable_sets_the_exec_bits() {
@@ -643,10 +684,11 @@ mod tests {
         handle_input(&i).expect("Input succeeds");
 
         let mut f = SingleFileArguments {
-            file:    "./tests/fixtures/DockerfileExample1".to_owned().into(),
-            strat:   Strategy::Latest,
-            dry_run: true,
-            common:  CommonOptions {
+            file:             "./tests/fixtures/DockerfileExample1".to_owned().into(),
+            strat:            Strategy::Latest,
+            dry_run:          true,
+            no_major_updates: vec![],
+            common:           CommonOptions {
                 arch:             None,
                 tag_search_limit: Some(1000),
                 debug:            false,
@@ -657,12 +699,13 @@ mod tests {
         };
 
         let mut m = MultiFileArguments {
-            folder:          "./tests/fixtures".into(),
-            strat:           Strategy::Latest,
-            dry_run:         true,
-            exclude_file:    vec!["./tests/fixtures/DockerfileExample1".to_owned()],
-            ignore_versions: vec!["node:8.0-alpine".to_owned()],
-            common:          CommonOptions {
+            folder:           "./tests/fixtures".into(),
+            strat:            Strategy::Latest,
+            dry_run:          true,
+            exclude_file:     vec!["./tests/fixtures/DockerfileExample1".to_owned()],
+            ignore_versions:  vec!["node:8.0-alpine".to_owned()],
+            no_major_updates: vec!["node".to_owned()],
+            common:           CommonOptions {
                 arch:             None,
                 tag_search_limit: Some(1000),
                 debug:            false,

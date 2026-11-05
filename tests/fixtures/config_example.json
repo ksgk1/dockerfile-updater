@@ -16,6 +16,7 @@
     "ignore_versions": [
       "alpine:3.12"
     ],
+    "no_major_updates": [],
     "strat": "LatestPatch"
   }
 }

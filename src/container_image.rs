@@ -187,12 +187,15 @@ impl Dockerfile {
     /// This function only returns an error if writing the updated dockerfile
     /// fails. Failures while fetching tags are logged and the affected image
     /// is skipped.
-    pub(crate) fn update_images(&mut self, apply_to_file: bool, strategy: &Strategy, limit: Option<u16>, arch: Option<&String>) -> Result<(), Error> {
+    pub(crate) fn update_images(
+        &mut self, apply_to_file: bool, strategy: Strategy, limit: Option<u16>, arch: Option<&String>, no_major_updates: &[ContainerImage],
+    ) -> Result<(), Error> {
         for image in self.get_base_images_mut() {
             match image.get_remote_tags(limit, arch, None) {
                 Ok(mut docker_image_tags) => {
                     docker_image_tags.sort();
-                    if let Some(found_tag) = image.get_tag().find_candidate_tag(&docker_image_tags, strategy) {
+                    let effective_strategy = capped_strategy(image, strategy, no_major_updates);
+                    if let Some(found_tag) = image.get_tag().find_candidate_tag(&docker_image_tags, effective_strategy) {
                         debug!("Found tag: {found_tag:?}");
                         image.set_tag(found_tag);
                     }
@@ -216,7 +219,7 @@ impl Dockerfile {
     /// Images whose tags could not be fetched are logged and skipped, so a
     /// single failing image does not abort the whole update.
     pub(crate) fn generate_image_updates(
-        &self, strategy: &Strategy, limit: Option<u16>, arch: Option<&String>, ignore_versions: &[ContainerImage],
+        &self, strategy: Strategy, limit: Option<u16>, arch: Option<&String>, ignore_versions: &[ContainerImage], no_major_updates: &[ContainerImage],
     ) -> DockerfileUpdate {
         let mut result = DockerfileUpdate {
             dockerfile: self.clone(),
@@ -226,7 +229,8 @@ impl Dockerfile {
             match image.get_remote_tags(limit, arch, None) {
                 Ok(mut docker_image_tags) => {
                     docker_image_tags.sort();
-                    if let Some(found_tag) = image.get_tag().find_candidate_tag(&docker_image_tags, strategy) {
+                    let effective_strategy = capped_strategy(image, strategy, no_major_updates);
+                    if let Some(found_tag) = image.get_tag().find_candidate_tag(&docker_image_tags, effective_strategy) {
                         debug!("Found tag: {found_tag:?}");
                         if !ignore_versions.contains(image) {
                             result.updates.push((index, found_tag.clone()));
@@ -805,9 +809,31 @@ impl ContainerImage {
         Ok((image.parse()?, flags, stage))
     }
 
+    /// Whether this image is contained in the given list of images, matching
+    /// only the registry path (group and name) and ignoring the tag. Used
+    /// for update restrictions that apply to an image regardless of its
+    /// current version.
+    pub(crate) fn is_in_image_list(&self, list: &[Self]) -> bool {
+        let registry_path = self.registry_path();
+        list.iter().any(|image| image.registry_path() == registry_path)
+    }
+
     /// Updates the tag of a stage's image.
     pub(crate) fn update_image_tag(&mut self, new_tag: &Tag) {
         self.set_tag(new_tag);
+    }
+}
+
+/// Returns the strategy to apply to the given image: images in
+/// `no_major_updates` are capped at their minor equivalent, so they never
+/// receive major updates regardless of the configured strategy.
+fn capped_strategy(image: &ContainerImage, strategy: Strategy, no_major_updates: &[ContainerImage]) -> Strategy {
+    if image.is_in_image_list(no_major_updates) {
+        let capped = strategy.without_major();
+        debug!("`{image}` is excluded from major updates; capping strategy from {strategy} to {capped}.");
+        capped
+    } else {
+        strategy
     }
 }
 
@@ -901,6 +927,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rand::RngExt;
 
+    use super::capped_strategy;
     use crate::container_image::{ContainerImage, DockerInstruction, Dockerfile, ImageMetadata};
     use crate::tag::Tag;
     use crate::utils::Strategy;
@@ -1242,8 +1269,44 @@ RUN echo && \
         let content = "FROM ghcr.io/user/image:v1\nFROM node@sha256:abc123\n";
         let mut dockerfile = Dockerfile::parse(content).unwrap();
 
-        dockerfile.update_images(false, &Strategy::Latest, None, None).expect("update_images succeeds");
+        dockerfile
+            .update_images(false, Strategy::Latest, None, None, &[])
+            .expect("update_images succeeds");
         assert_eq!(content, dockerfile.to_string());
+    }
+
+    #[test]
+    fn image_list_matching_ignores_tags() {
+        let list: Vec<ContainerImage> = ["alpine", "guacamole/guacamole:1.3.0", "mcr.microsoft.com/dotnet/aspnet:9.0.0"]
+            .iter()
+            .map(|image| image.parse().unwrap())
+            .collect();
+
+        let image: ContainerImage = "alpine:3.20".parse().unwrap();
+        assert!(image.is_in_image_list(&list));
+        let image: ContainerImage = "guacamole/guacamole:1.5.0".parse().unwrap();
+        assert!(image.is_in_image_list(&list));
+        let image: ContainerImage = "mcr.microsoft.com/dotnet/aspnet:10.0.0".parse().unwrap();
+        assert!(image.is_in_image_list(&list));
+
+        let image: ContainerImage = "node:22".parse().unwrap();
+        assert!(!image.is_in_image_list(&list));
+        let image: ContainerImage = "guacamole/other:1.0.0".parse().unwrap();
+        assert!(!image.is_in_image_list(&list));
+    }
+
+    #[test]
+    fn capped_strategy_limits_major_strategies() {
+        let no_major_updates: Vec<ContainerImage> = vec!["alpine".parse().unwrap()];
+        let alpine: ContainerImage = "alpine:3.20".parse().unwrap();
+        let node: ContainerImage = "node:22".parse().unwrap();
+
+        assert_eq!(capped_strategy(&alpine, Strategy::Latest, &no_major_updates), Strategy::LatestMinor);
+        assert_eq!(capped_strategy(&alpine, Strategy::NextMajor, &no_major_updates), Strategy::NextMinor);
+        assert_eq!(capped_strategy(&alpine, Strategy::LatestMajor, &no_major_updates), Strategy::LatestMinor);
+        assert_eq!(capped_strategy(&alpine, Strategy::NextPatch, &no_major_updates), Strategy::NextPatch);
+        assert_eq!(capped_strategy(&node, Strategy::Latest, &no_major_updates), Strategy::Latest);
+        assert_eq!(capped_strategy(&node, Strategy::LatestMajor, &no_major_updates), Strategy::LatestMajor);
     }
 
     #[test]
@@ -1262,5 +1325,39 @@ RUN echo && \
         let registry_image: ContainerImage = "mcr.microsoft.com/dotnet/aspnet:9.0.0".parse().unwrap();
         let tags = registry_image.get_remote_tags(None, None, None).expect("Getting tags finishes successfully");
         assert_ne!(tags, [] as [Tag; 0]);
+    }
+
+    #[test]
+    #[ignore = "requires live network access to MCR"]
+    fn no_major_updates_blocks_dotnet_sdk_11() {
+        // .NET 11 is currently in preview and published on MCR as the `11.0`
+        // tag. With `no_major_updates` set for the sdk image, `sdk:10.0.0`
+        // must not be bumped to the 11.x major line.
+        let content = "FROM mcr.microsoft.com/dotnet/sdk:10.0.0 AS build\n";
+        let dockerfile = Dockerfile::parse(content).unwrap();
+        let no_major_updates: Vec<ContainerImage> = vec!["mcr.microsoft.com/dotnet/sdk".parse().unwrap()];
+
+        // Control: without the restriction, the `latest` strategy leaves the
+        // 10.x line (currently jumping straight to 11.0), which proves that
+        // the fetched registry data really contains a newer major.
+        let uncapped = dockerfile.generate_image_updates(Strategy::Latest, None, None, &[], &[]);
+        let uncapped_tag = uncapped.updates.first().map(|(_, tag)| tag.clone());
+        assert!(
+            uncapped_tag.as_ref().is_some_and(|tag| tag.major.is_some_and(|major| major > 10)),
+            "expected the uncapped update to leave the 10.x major line, got: {uncapped_tag:?}"
+        );
+
+        // With `no_major_updates` set, the sdk image must never receive a
+        // major update: either no update is found, or it stays within 10.x.
+        let capped = dockerfile.generate_image_updates(Strategy::Latest, None, None, &[], &no_major_updates);
+        for (_, tag) in &capped.updates {
+            assert!(
+                tag.major.is_none_or(|major| major <= 10),
+                "sdk image was updated to a newer major line: {tag}"
+            );
+        }
+        let applied = capped.apply().to_string();
+        assert!(applied.contains("sdk:10.0.0"), "sdk image should still be on 10.x, got: {applied}");
+        assert!(!applied.contains("sdk:11"), "sdk image must not be updated to 11.x, got: {applied}");
     }
 }

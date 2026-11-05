@@ -192,7 +192,7 @@ impl Tag {
 
     /// Will return an Option, to an item in the list, with a tag that matches
     /// the strategy.
-    pub(crate) fn find_candidate_tag<'a>(&self, tag_list: &'a [Self], strategy: &Strategy) -> Option<&'a Self> {
+    pub(crate) fn find_candidate_tag<'a>(&self, tag_list: &'a [Self], strategy: Strategy) -> Option<&'a Self> {
         let mut filtered_tags: Vec<&Self> = tag_list
             .iter()
             .filter(|tag| {

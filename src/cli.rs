@@ -118,6 +118,17 @@ pub struct SingleFileArguments {
     #[arg(long, short = 'n', help = "If set will output the new file contents for inspection.")]
     pub(crate) dry_run: bool,
 
+    /// Allows to prevent major updates for certain images. Minor or patch
+    /// updates will still be performed if the stategy allows it.
+    #[arg(
+        long,
+        help = "The list of images that will never receive major updates (they are capped at minor updates), e.g.: alpine",
+        required = false,
+        num_args = 0..
+    )]
+    #[serde(default)]
+    pub(crate) no_major_updates: Vec<String>,
+
     #[command(flatten)]
     pub(crate) common: CommonOptions,
 }
@@ -193,6 +204,19 @@ pub struct MultiFileArguments {
     /// files that will be processed.
     #[arg(long, short, help = "The list of versions to ignore (they will not be updated), e.g.: alpine:3.12", required = false, num_args = 0..)]
     pub(crate) ignore_versions: Vec<String>,
+
+    /// Allows to prevent major updates for certain images, regardless of the
+    /// chosen strategy. The images in this list are capped at their minor
+    /// equivalent, so they still receive minor and patch updates. This
+    /// applies globally for all found files that will be processed.
+    #[arg(
+        long,
+        help = "The list of images that will never receive major updates (they are capped at minor updates), e.g.: alpine",
+        required = false,
+        num_args = 0..
+    )]
+    #[serde(default)]
+    pub(crate) no_major_updates: Vec<String>,
 
     #[command(flatten)]
     pub(crate) common: CommonOptions,
