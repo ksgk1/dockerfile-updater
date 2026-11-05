@@ -483,8 +483,8 @@ pub fn create_cache_dir() {
 }
 
 /// Handling the self update, to download a new version from GitHub, if one is
-/// available. The download is verified against the published checksum if one
-/// exists.
+/// available. The download is placed next to the currently running binary and
+/// verified against the published checksum if one exists.
 pub fn handle_self_update() {
     let agent = &*HTTP_AGENT;
     let Some(latest) = fetch_latest_version(agent) else { return };
@@ -505,11 +505,15 @@ pub fn handle_self_update() {
     let file_name = format!("dfu-v{latest}{suffix}");
     let download_url = format!("{}/download/v{latest}/{file_name}", github_release_url());
     debug!("Download URL: {download_url}");
-    let Ok(mut full_path) = env::current_dir() else {
-        error!("Could not determine the current directory; cannot place the downloaded release.");
+    let Ok(current_binary) = env::current_exe() else {
+        error!("Could not determine the location of the running binary; cannot place the downloaded release.");
         return;
     };
-    full_path.push(&file_name);
+    let Some(binary_dir) = current_binary.parent() else {
+        error!("Could not determine the directory of the running binary; cannot place the downloaded release.");
+        return;
+    };
+    let full_path = binary_dir.join(&file_name);
 
     if let Err(e) = download_file(agent, &download_url, &full_path) {
         error!("Error while downloading new release: {e}");
