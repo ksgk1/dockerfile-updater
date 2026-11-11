@@ -1310,6 +1310,21 @@ RUN echo && \
     }
 
     #[test]
+    fn no_major_updates_still_allows_patch_updates_within_same_major() {
+        let image: ContainerImage = "mcr.microsoft.com/dotnet/sdk:10.0.203".parse().unwrap();
+        let no_major_updates: Vec<ContainerImage> = vec!["mcr.microsoft.com/dotnet/sdk".parse().unwrap()];
+        let tags: Vec<Tag> = ["10.0.203", "10.0.404", "11.0.100"].iter().map(|tag| tag.parse().unwrap()).collect();
+
+        let uncapped = image.get_tag().find_candidate_tag(&tags, Strategy::Latest);
+        assert_eq!(uncapped.map(ToString::to_string).as_deref(), Some("11.0.100"));
+
+        let strategy = capped_strategy(&image, Strategy::Latest, &no_major_updates);
+        assert_eq!(strategy, Strategy::LatestMinor);
+        let found = image.get_tag().find_candidate_tag(&tags, strategy);
+        assert_eq!(found.map(ToString::to_string).as_deref(), Some("10.0.404"));
+    }
+
+    #[test]
     #[ignore = "requires live network access to Docker Hub and MCR"]
     fn remote_tags() {
         let registry_image: ContainerImage = "node:8.0.0-alpine3.10".parse().unwrap();
@@ -1351,10 +1366,7 @@ RUN echo && \
         // major update: either no update is found, or it stays within 10.x.
         let capped = dockerfile.generate_image_updates(Strategy::Latest, None, None, &[], &no_major_updates);
         for (_, tag) in &capped.updates {
-            assert!(
-                tag.major.is_none_or(|major| major <= 10),
-                "sdk image was updated to a newer major line: {tag}"
-            );
+            assert!(tag.major.is_none_or(|major| major <= 10), "sdk image was updated to a newer major line: {tag}");
         }
         let applied = capped.apply().to_string();
         assert!(applied.contains("sdk:10.0.0"), "sdk image should still be on 10.x, got: {applied}");

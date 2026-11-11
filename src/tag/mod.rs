@@ -199,7 +199,8 @@ impl Tag {
                 self.is_same_variant(tag)
                     && match strategy {
                         Strategy::NextPatch | Strategy::LatestPatch => self.is_next_patch(tag),
-                        Strategy::NextMinor | Strategy::LatestMinor => self.is_next_minor(tag),
+                        Strategy::NextMinor => self.is_next_minor(tag),
+                        Strategy::LatestMinor => self.is_next_minor(tag) || self.is_next_patch(tag),
                         Strategy::NextMajor | Strategy::LatestMajor => self.is_next_major(tag),
                         Strategy::Latest => self.is_next_major(tag) || self.is_next_minor(tag) || self.is_next_patch(tag),
                     }
@@ -234,6 +235,7 @@ mod tests {
 
     use crate::tag::Tag;
     use crate::tag::variant::TagVariant;
+    use crate::utils::Strategy;
 
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -478,5 +480,24 @@ mod tests {
             let got = c.is_next_major(&n);
             assert_eq!(got, *expect, "is_next_major({}, {}) → expected {}, got {}", current, next, expect, got);
         }
+    }
+
+    #[test]
+    fn find_candidate_tag_latest_minor() {
+        let current: Tag = "10.0.203".parse().unwrap();
+        let tags: Vec<Tag> = ["9.9.9", "10.0.203", "10.0.404", "11.0.100"].iter().map(|tag| tag.parse().unwrap()).collect();
+
+        let latest_minor = current.find_candidate_tag(&tags, Strategy::LatestMinor);
+        assert_eq!(latest_minor.map(ToString::to_string).as_deref(), Some("10.0.404"));
+
+        let latest = current.find_candidate_tag(&tags, Strategy::Latest);
+        assert_eq!(latest.map(ToString::to_string).as_deref(), Some("11.0.100"));
+
+        let next_minor = current.find_candidate_tag(&tags, Strategy::NextMinor);
+        assert_eq!(next_minor, None);
+
+        let tags: Vec<Tag> = ["10.0.203", "10.0.404", "10.1.2", "11.0.100"].iter().map(|tag| tag.parse().unwrap()).collect();
+        let latest_minor = current.find_candidate_tag(&tags, Strategy::LatestMinor);
+        assert_eq!(latest_minor.map(ToString::to_string).as_deref(), Some("10.1.2"));
     }
 }
