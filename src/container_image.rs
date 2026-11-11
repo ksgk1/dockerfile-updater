@@ -1368,8 +1368,11 @@ RUN echo && \
         for (_, tag) in &capped.updates {
             assert!(tag.major.is_none_or(|major| major <= 10), "sdk image was updated to a newer major line: {tag}");
         }
-        let applied = capped.apply().to_string();
-        assert!(applied.contains("sdk:10.0.0"), "sdk image should still be on 10.x, got: {applied}");
-        assert!(!applied.contains("sdk:11"), "sdk image must not be updated to 11.x, got: {applied}");
+        let applied = capped.apply();
+        let applied_tag = applied.get_instructions().iter().find_map(DockerInstruction::get_image_tag);
+        assert!(
+            applied_tag.is_some_and(|tag| tag.major == Some(10)),
+            "sdk image should stay on a 10.x tag (e.g. a 10.0.x patch bump), got: {applied}"
+        );
     }
 }
